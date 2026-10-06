@@ -33,7 +33,7 @@
     minZoom: 11, maxZoom: 19, keepBuffer: 4, updateWhenZooming: false,
   }).addTo(map);
 
-  const red = { color: '#ff3b3b', weight: 1.5, fillColor: '#d62f2f', fillOpacity: 1 };
+  const red = { color: '#ff3b3b', weight: 1.5, fillColor: '#ff3b3b', fillOpacity: 0.4 };
 
   fetch('zones.geojson').then(r => r.json()).then(d => L.geoJSON(d, { style: red }).addTo(map));
 </script>
