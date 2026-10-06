@@ -22,17 +22,18 @@
 <div class="title">Singapore No-Fly Zones<small><i></i>Drones not allowed</small></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-  const map = L.map('map', { zoomControl: false }).setView([1.3521, 103.8198], 12);
+  // Fractional zoom + canvas renderer = smooth wheel/trackpad zooming and panning
+  const map = L.map('map', {
+    zoomControl: false, preferCanvas: true,
+    zoomSnap: 0, zoomDelta: 0.5, wheelPxPerZoomLevel: 90, wheelDebounceTime: 10,
+    inertiaDeceleration: 2000,
+  }).setView([1.3521, 103.8198], 12);
   L.tileLayer('https://www.onemap.gov.sg/maps/tiles/Night/{z}/{x}/{y}.png', {
     attribution: '<img src="https://www.onemap.gov.sg/web-assets/images/logo/om_logo.png" style="height:12px"> OneMap &copy; SLA · Zones: data.gov.sg (NParks, MHA), CAAS 5 km rule',
-    minZoom: 11, maxZoom: 19,
+    minZoom: 11, maxZoom: 19, keepBuffer: 4, updateWhenZooming: false,
   }).addTo(map);
 
-  const red = { color: '#ff3b3b', weight: 1, fillColor: '#ff3b3b', fillOpacity: 0.35 };
-
-  // CAAS: no drones within 5 km of an aerodrome. ponytail: hand-placed centres, swap for official polygons if precision matters
-  [[1.3644, 103.9915], [1.4170, 103.8678], [1.3604, 103.9097], [1.3871, 103.7086], [1.4253, 103.8130]]
-    .forEach(c => L.circle(c, { radius: 5000, ...red, fillOpacity: 0.2 }).addTo(map));
+  const red = { color: '#ff3b3b', weight: 1.5, fillColor: '#ff3b3b', fillOpacity: 0.35 };
 
   fetch('zones.geojson').then(r => r.json()).then(d => L.geoJSON(d, { style: red }).addTo(map));
 </script>
