@@ -3,7 +3,7 @@
 # ///
 """Rebuild zones.geojson: download no-fly datasets, add 5 km aerodrome circles, merge overlaps. Run: uv run build.py"""
 import json, math, time, urllib.request
-from shapely.geometry import shape, mapping, Point
+from shapely.geometry import shape, mapping, Point, Polygon
 from shapely.ops import transform, unary_union
 
 DATASETS = ["d_15457a8f67905fb6ed890fca2ebac5f7",  # NParks no-drone parks
@@ -28,7 +28,11 @@ for ds in DATASETS:
     time.sleep(3)  # data.gov.sg rate limit
 shapes += [Point(to_m(*c)).buffer(5000, 64) for c in AERODROMES]
 
-merged = transform(to_deg, unary_union(shapes).simplify(2))  # 2 m tolerance
+# Close hairline gaps between neighbouring zones (+/-3 m), then drop leftover slivers/holes under 5000 m²
+merged = unary_union(shapes).buffer(3).buffer(-3)
+merged = unary_union([Polygon(p.exterior, [h for h in p.interiors if Polygon(h).area >= 5000])
+                      for p in getattr(merged, "geoms", [merged])])
+merged = transform(to_deg, merged.simplify(2))  # 2 m tolerance
 geom = json.loads(json.dumps(mapping(merged)), parse_float=lambda s: round(float(s), 5))
 json.dump({"type": "Feature", "properties": {}, "geometry": geom}, open("zones.geojson", "w"), separators=(",", ":"))
 print(f"{len(shapes)} zones -> {len(getattr(merged, 'geoms', [merged]))} blocks")
