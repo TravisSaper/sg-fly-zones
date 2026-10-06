@@ -1,10 +1,10 @@
 # /// script
 # dependencies = ["shapely"]
 # ///
-"""Rebuild zones.geojson: download no-fly datasets, add 5 km aerodrome circles, merge overlaps. Run: uv run build.py"""
-import json, math, time, urllib.request
-from shapely.geometry import shape, mapping, Point, Polygon
-from shapely.ops import transform, unary_union
+"""Rebuild zones.geojson (merged no-fly zones) and spots.geojson (open spaces outside them). Run: uv run build.py"""
+import json, math, time, urllib.parse, urllib.request
+from shapely.geometry import shape, mapping, Point, Polygon, LineString
+from shapely.ops import transform, unary_union, polygonize
 
 DATASETS = ["d_15457a8f67905fb6ed890fca2ebac5f7",  # NParks no-drone parks
             "d_3d05a22ad76368500bd6d5ef72367123"]  # Air Navigation Act protected areas
@@ -17,8 +17,19 @@ to_m = lambda x, y, z=None: (x * KX, y * KY)
 to_deg = lambda x, y, z=None: (x / KX, y / KY)
 
 
-def fetch(url):
-    return json.load(urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "sg-fly-zones"})))
+def fetch(url, data=None):
+    req = urllib.request.Request(url, data, headers={"User-Agent": "sg-fly-zones"})
+    return json.load(urllib.request.urlopen(req, timeout=300))
+
+
+def save(path, features):
+    for f in features:  # 5 decimals ≈ 1 m
+        f["geometry"] = json.loads(json.dumps(mapping(transform(to_deg, f["geometry"]))), parse_float=lambda s: round(float(s), 5))
+    json.dump({"type": "FeatureCollection", "features": features}, open(path, "w"), separators=(",", ":"))
+
+
+def parts(g):
+    return [p for p in getattr(g, "geoms", [g]) if p.geom_type == "Polygon"]
 
 
 shapes = []
@@ -32,7 +43,41 @@ shapes += [Point(to_m(*c)).buffer(5000, 64) for c in AERODROMES]
 merged = unary_union(shapes).buffer(3).buffer(-3)
 merged = unary_union([Polygon(p.exterior, [h for h in p.interiors if Polygon(h).area >= 5000])
                       for p in getattr(merged, "geoms", [merged])])
-merged = transform(to_deg, merged.simplify(2))  # 2 m tolerance
-geom = json.loads(json.dumps(mapping(merged)), parse_float=lambda s: round(float(s), 5))
-json.dump({"type": "Feature", "properties": {}, "geometry": geom}, open("zones.geojson", "w"), separators=(",", ":"))
-print(f"{len(shapes)} zones -> {len(getattr(merged, 'geoms', [merged]))} blocks")
+merged = merged.simplify(2)  # 2 m tolerance
+save("zones.geojson", [{"type": "Feature", "properties": {}, "geometry": merged}])
+print(f"{len(shapes)} zones -> {len(parts(merged))} blocks")
+
+# Open public spaces from OpenStreetMap, minus every no-fly zone
+OVERPASS = """[out:json][timeout:180];
+(
+  nwr["leisure"~"^(park|recreation_ground|common|pitch)$"]["access"!~"^(private|no|customers)$"](1.15,103.59,1.48,104.1);
+  nwr["natural"="beach"](1.15,103.59,1.48,104.1);
+);
+out geom;"""
+MIN_AREA = 3000  # m²; ponytail: one size fits all, tune if tiny pitches or huge parks dominate
+osm = fetch("https://overpass-api.de/api/interpreter", urllib.parse.urlencode({"data": OVERPASS}).encode())["elements"]
+spots = []
+for e in osm:
+    if e["type"] == "way" and len(e.get("geometry", [])) >= 4:
+        lines = [e["geometry"]]
+    elif e["type"] == "relation":  # multipolygon: stitch outer rings
+        lines = [m["geometry"] for m in e.get("members", []) if m.get("role") == "outer" and m.get("geometry")]
+    else:
+        continue
+    poly = unary_union(list(polygonize([LineString([to_m(p["lon"], p["lat"]) for p in l]) for l in lines if len(l) > 1])))
+    tags = e.get("tags", {})
+    kind = "beach" if tags.get("natural") == "beach" else tags.get("leisure")
+    spots.append(({"name": tags.get("name", ""), "kind": kind}, poly.buffer(0).difference(merged)))
+
+# Biggest first; smaller spaces lose whatever a bigger one already covers, so nothing draws twice
+# ponytail: O(n²) running union, fine for ~4k shapes; STRtree if it gets slow
+taken, features = Polygon(), []
+for props, g in sorted(spots, key=lambda s: -s[1].area):
+    rest = g.difference(taken)
+    taken = taken.union(g)
+    features += [{"type": "Feature", "properties": props, "geometry": p.simplify(2)} for p in parts(rest) if p.area >= MIN_AREA]
+spots = features
+# Self-check: a "spot" must never sit inside a no-fly zone (50 m² slack for the 2 m simplify)
+assert all(f["geometry"].intersection(merged).area < 50 for f in spots), "spot overlaps a no-fly zone"
+save("spots.geojson", spots)
+print(f"{len(osm)} OSM spaces -> {len(spots)} spots outside no-fly zones")

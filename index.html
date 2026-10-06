@@ -15,11 +15,12 @@
   }
   .title small { display: block; font-weight: 400; color: #9aa0a6; margin-top: 4px; }
   .title i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: #ff3b3b; margin-right: 6px; }
+  .title i.ok { background: #34d399; }
 </style>
 </head>
 <body>
 <div id="map"></div>
-<div class="title">Singapore No-Fly Zones<small><i></i>Drones not allowed</small></div>
+<div class="title">Singapore FPV Map<small><i></i>No-fly zone</small><small><i class="ok"></i>Open space outside zones</small></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
   // Fractional zoom + canvas renderer = smooth wheel/trackpad zooming and panning
@@ -28,14 +29,30 @@
     zoomSnap: 0, zoomDelta: 0.5, wheelPxPerZoomLevel: 90, wheelDebounceTime: 10,
     inertiaDeceleration: 2000,
   }).setView([1.3521, 103.8198], 12);
-  L.tileLayer('https://www.onemap.gov.sg/maps/tiles/Night/{z}/{x}/{y}.png', {
-    attribution: '<img src="https://www.onemap.gov.sg/web-assets/images/logo/om_logo.png" style="height:12px"> OneMap &copy; SLA · Zones: data.gov.sg (NParks, MHA), CAAS 5 km rule',
-    minZoom: 11, maxZoom: 19, keepBuffer: 4, updateWhenZooming: false,
+  const tiles = { minZoom: 11, maxZoom: 19, keepBuffer: 4, updateWhenZooming: false };
+  const onemap = style => L.tileLayer(`https://www.onemap.gov.sg/maps/tiles/${style}/{z}/{x}/{y}.png`, {
+    ...tiles, attribution: '<img src="https://www.onemap.gov.sg/web-assets/images/logo/om_logo.png" style="height:12px"> OneMap &copy; SLA',
+  });
+  const esri = 'https://server.arcgisonline.com/ArcGIS/rest/services';
+  const satellite = L.layerGroup([
+    L.tileLayer(`${esri}/World_Imagery/MapServer/tile/{z}/{y}/{x}`, { ...tiles, attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics' }),
+    L.tileLayer(`${esri}/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}`, tiles),
+  ]).addTo(map);
+  map.attributionControl.addAttribution('Zones: data.gov.sg (NParks, MHA), CAAS 5 km rule · Spaces: &copy; OpenStreetMap');
+
+  const zones = L.geoJSON(null, { style: { color: '#ff3b3b', weight: 1.5, fillColor: '#ff3b3b', fillOpacity: 0.4 } }).addTo(map);
+  const spots = L.geoJSON(null, {
+    style: { color: '#34d399', weight: 1.5, fillColor: '#34d399', fillOpacity: 0.3 },
+    onEachFeature: (f, l) => l.bindTooltip(f.properties.name || f.properties.kind, { sticky: true }),
   }).addTo(map);
+  fetch('zones.geojson').then(r => r.json()).then(d => zones.addData(d));
+  fetch('spots.geojson').then(r => r.json()).then(d => spots.addData(d));
 
-  const red = { color: '#ff3b3b', weight: 1.5, fillColor: '#ff3b3b', fillOpacity: 0.4 };
-
-  fetch('zones.geojson').then(r => r.json()).then(d => L.geoJSON(d, { style: red }).addTo(map));
+  L.control.layers(
+    { 'Satellite': satellite, 'Street': onemap('Default'), 'Night': onemap('Night') },
+    { 'No-fly zones': zones, 'Open spaces': spots },
+    { collapsed: false },
+  ).addTo(map);
 </script>
 </body>
 </html>
