@@ -55,7 +55,14 @@ OVERPASS = """[out:json][timeout:180];
 );
 out geom;"""
 MIN_AREA = 3000  # m²; ponytail: one size fits all, tune if tiny pitches or huge parks dominate
-osm = fetch("https://overpass-api.de/api/interpreter", urllib.parse.urlencode({"data": OVERPASS}).encode())["elements"]
+for mirror in ["https://overpass-api.de", "https://overpass.private.coffee", "https://overpass.kumi.systems"]:
+    try:  # Overpass servers 504 when busy; try the next one
+        osm = fetch(f"{mirror}/api/interpreter", urllib.parse.urlencode({"data": OVERPASS}).encode())["elements"]
+        break
+    except OSError as e:  # HTTP errors and timeouts
+        print(f"{mirror}: {e}")
+else:
+    raise SystemExit("all Overpass mirrors failed")
 spots = []
 for e in osm:
     if e["type"] == "way" and len(e.get("geometry", [])) >= 4:
@@ -67,7 +74,7 @@ for e in osm:
     poly = unary_union(list(polygonize([LineString([to_m(p["lon"], p["lat"]) for p in l]) for l in lines if len(l) > 1])))
     tags = e.get("tags", {})
     kind = "beach" if tags.get("natural") == "beach" else tags.get("leisure")
-    spots.append(({"name": tags.get("name", ""), "kind": kind}, poly.buffer(0).difference(merged)))
+    spots.append(({"name": tags.get("name", ""), "kind": kind}, poly.buffer(0).simplify(2).difference(merged)))  # simplify before cutting so edges match zones exactly
 
 # Biggest first; smaller spaces lose whatever a bigger one already covers, so nothing draws twice
 # ponytail: O(n²) running union, fine for ~4k shapes; STRtree if it gets slow
@@ -75,9 +82,9 @@ taken, features = Polygon(), []
 for props, g in sorted(spots, key=lambda s: -s[1].area):
     rest = g.difference(taken)
     taken = taken.union(g)
-    features += [{"type": "Feature", "properties": props, "geometry": p.simplify(2)} for p in parts(rest) if p.area >= MIN_AREA]
+    features += [{"type": "Feature", "properties": props, "geometry": p} for p in parts(rest) if p.area >= MIN_AREA]
 spots = features
-# Self-check: a "spot" must never sit inside a no-fly zone (50 m² slack for the 2 m simplify)
-assert all(f["geometry"].intersection(merged).area < 50 for f in spots), "spot overlaps a no-fly zone"
+# Self-check: a "spot" must never sit inside a no-fly zone (1 m² slack for float noise)
+assert all(f["geometry"].intersection(merged).area < 1 for f in spots), "spot overlaps a no-fly zone"
 save("spots.geojson", spots)
 print(f"{len(osm)} OSM spaces -> {len(spots)} spots outside no-fly zones")
